@@ -25,6 +25,7 @@ MP1Node::MP1Node(Member *member, Params *params, EmulNet *emul, Log *log, Addres
 	this->log = log;
 	this->par = params;
 	this->memberNode->addr = *address;
+	this->memberNode->inited = true;
 }
 
 /**
@@ -129,16 +130,21 @@ int MP1Node::introduceSelfToGroup(Address *joinaddr) {
         log->LOG(&memberNode->addr, "Starting up group...");
 #endif
         memberNode->inGroup = true;
+		memberNode->booter = true;
     }
     else {
-        size_t msgsize = sizeof(MessageHdr) + sizeof(joinaddr->addr) + sizeof(long) + 1;
-        msg = (MessageHdr *) malloc(msgsize * sizeof(char));
+        //size_t msgsize = sizeof(MessageHdr) + sizeof(joinaddr->addr) + sizeof(long) + 1;
+        //msg = (MessageHdr *) malloc(msgsize * sizeof(char));
 
         // create JOINREQ message: format of data is {struct Address myaddr}
-        msg->msgType = JOINREQ;
-        memcpy((char *)(msg+1), &memberNode->addr.addr, sizeof(memberNode->addr.addr));
-        memcpy((char *)(msg+1) + 1 + sizeof(memberNode->addr.addr), &memberNode->heartbeat, sizeof(long));
-
+        //msg->msgType = JOINREQ;
+        //memcpy((char *)(msg+1), &memberNode->addr.addr, sizeof(memberNode->addr.addr));
+        //memcpy((char *)(msg+1) + 1 + sizeof(memberNode->addr.addr), &memberNode->heartbeat, sizeof(long));
+        
+		MessageJoinReq * request = (MessageJoinReq *) malloc(sizeof(MessageJoinReq));
+		request->messageheader.msgType = JOINREQ;
+		request->nodeaddr = memberNode->addr;
+		request->heartbeat = memberNode->heartbeat;
 #ifdef DEBUGLOG
         sprintf(s, "Trying to join...");
         log->LOG(&memberNode->addr, s);
@@ -218,6 +224,205 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
 	/*
 	 * Your code goes here
 	 */
+	 
+	if (!memberNode->inited || !memberNode->inGroup) { // not initialized or in any group, just return
+		return false;
+	}
+	 
+	MessageHdr * msg = (MessageHdr *) data;
+	 
+	switch (msg->msgType) {
+	    case JOINREQ: 
+		    handle_message_JOINREQ(env, data, size);
+			break;
+		case JOINREP:
+		    handle_message_JOINREP(env, data, size); 
+			break;
+		case LEAVENOTICE:
+		    handle_message_LEAVENOTICE(env, data, size); 
+			break;
+		case HEARTBEAT:
+		    handle_message_HEARTBEAT(env, data, size); 
+			break;
+		case MEMBERFAILURE:
+		    handle_message_MEMBERFAILURE(env, data, size); 
+			break;
+		default: 
+		    #ifdef DEBUGLOG
+            log->LOG(&memberNode->addr, "Received undefined message, exiting.");
+            #endif
+            exit(1);
+	}
+	
+	//free(msg);
+	
+	return true;
+}
+
+/**
+ * FUNCTION NAME: handle_message_JOINREQ
+ *
+ * DESCRIPTION: check whether this is the introducier node, if yes, process it, send back response;
+ * if not, gossiply send it out (likely this will not happen, since new node specificly send request to introducer)
+ */
+void MP1Node::handle_message_JOINREQ(void *env, char *data, int size ) {
+
+	/*
+	 * Your code goes here
+	*/
+	MessageJoinReq * req = (MessageJoinReq *) data;
+	Address addr = req->nodeaddr;
+	size_t pos = addr.find(":");
+	int id = stoi(addr.substr(0, pos));
+	short port = (short)stoi(addr.substr(pos + 1, addr.size()-pos-1));
+		
+	for (auto entry : memberNode->memberList) {
+		if (id == entry->id && port == entry->port) { // node is already registered to this machine, simply return
+			return;
+		}
+	}
+	
+	//new node to register
+	//step 1: advertise it to other nodes in memberlist
+	for (int index = 1, index < memberNode->memberList.size(), index ++) {
+		MemberListEntry entry = memberNode->memberList[index];
+		Address toaddr(to_string(entry->id) + ":" + to_string(entry->port));
+		// send JOINREQ message to introducer member
+        emulNet->ENsend(&memberNode->addr, toaddr, (char *)msg, msgsize);
+	}
+	
+	//step 2: put it in the memberlist
+	MemberListEntry new_entry(id, port, req->heartbeat, memberNode->heartbeat);
+	memberNode->memberList.push_back(new_entry);
+	
+	free(req);
+    return;
+}
+
+/**
+ * FUNCTION NAME: handle_message_JOINREP
+ *
+ * DESCRIPTION: initialize memberList
+
+ */
+void MP1Node::handle_message_JOINREP(void *env, char *data, int size ) {
+    
+	/*
+	 * Your code goes here
+	 */
+	MessageJoinResp * welcome_resp = (MessageJoinResp *) data;
+	 
+	if (memberNode->inited && !memberNode->inGroup) { // should we also compare address of node?
+		memberNode->inGroup = true;
+		memberNode->nnb = 0;
+		
+		// index start from 1 to avoid send message to itself
+		for (int index = 1; index < NUM_MEMBERLIST_ENTRIES_COPY; index ++) {
+			if (data->memberList[index]->id != 0 || data->memberList[index]->port != 0) {
+			    memberNode->memberList.push_back(data->memberList[index]);
+				memberNode->nnb += 1;
+		    } else {
+				break;
+			}
+		}
+	} 
+    
+	free(welcome_resp);
+    return;
+}
+
+/**
+ * FUNCTION NAME: handle_message_LEAVENOTICE
+ *
+ * DESCRIPTION: 
+
+ */
+void MP1Node::handle_message_LEAVENOTICE(void *env, char *data, int size ) {
+
+	/*
+	 * Your code goes here
+	 */
+    
+	MessageLeaveNotice * leave_notice = (MessageLeaveNotice *) data;
+	Address addr = leave_notice->nodeaddr;
+	size_t pos = addr.find(":");
+	int id = stoi(addr.substr(0, pos));
+	short port = (short)stoi(addr.substr(pos + 1, addr.size()-pos-1));
+	//step 1: delete the node from the memberlisth
+	for (int index = 1, index < memberNode->memberList.size(), index ++) {
+		MemberListEntry entry = memberNode->memberList[index];
+		
+		if (id == entry->id && port == entry->port) {
+			memberNode->memberList.erase(memberNode->memberList.begin() + index);
+		}
+	}
+	
+	//step 2: check the leaving node's memberlist, add any missing member to the memberlist
+	
+	
+	free(leave_notice);
+    return;
+}
+
+/**
+ * FUNCTION NAME: handle_message_HEARTBEAT
+ *
+ * DESCRIPTION: 
+
+ */
+void MP1Node::handle_message_HEARTBEAT(void *env, char *data, int size ) {
+
+	/*
+	 * Your code goes here
+	 */
+
+    return;
+}
+
+/**
+ * FUNCTION NAME: handle_message_MEMBERFAILURE
+ *
+ * DESCRIPTION: 
+
+ */
+void MP1Node::handle_message_MEMBERFAILURE(void *env, char *data, int size ) {
+
+	/*
+	 * Your code goes here
+	 */
+
+    return;
+}
+
+/**
+ * FUNCTION NAME: send_gossip_msg
+ *
+ * DESCRIPTION: Send message with gossip-like way to its neiboughs
+ */
+void MP1Node::send_gossip_msg(char* request, int request_size) {
+    int numofnb, numofrcv, rcvoffset;
+    
+#ifdef DEBUGLOG
+    static char s[1024];
+    sprintf(s, "Gossip send msgs...");
+    log->LOG(&memberNode->addr, s);
+#endif
+
+    // send message to randomly selected N members
+	numofnb = memberNode.memberList.size();
+	numofrcv = min(numofnb, GOSSIP_NUMBER);
+	
+	srand (time(NULL));
+	rcvoffset = rand() % numofnb;
+	
+	for (int count = 0; count < numofrcv; count ++) {
+		int index = (count + rcvoffset) % numofnb;
+		Address toaddr(memberNode->memberList[index].id + ":" + memberNode->memberList[index].port);
+        emulNet->ENsend(&memberNode->addr, &toaddr, (char *)request, request_size);
+    }
+}
+
+    return;
 }
 
 /**

@@ -11,16 +11,15 @@
 #include "stdincludes.h"
 #include "Log.h"
 #include "Params.h"
-#include "Member.h"
+#include "Member.ho"
 #include "EmulNet.h"
 #include "Queue.h"
-
 /**
  * Macros
  */
 #define TREMOVE 20
 #define TFAIL 5
-
+#define NUM_MEMBERLIST_ENTRIES_COPY 20
 /*
  * Note: You can change/add any functions in MP1Node.{h,cpp}
  */
@@ -31,6 +30,9 @@
 enum MsgTypes{
     JOINREQ,
     JOINREP,
+	LEAVENOTICE,
+	HEARTBEAT,
+	MEMBERFAILURE,
     DUMMYLASTMSGTYPE
 };
 
@@ -44,6 +46,52 @@ typedef struct MessageHdr {
 }MessageHdr;
 
 /**
+ * STRUCT NAME: MessageJoinReq
+ *
+ * DESCRIPTION: Message body of a join request
+ */
+typedef struct MessageJoinReq {
+	MessageHdr messageheader; // message type, etc..
+	Address nodeaddr; // address of the this node 
+	long heartbeat; // hearrbeat of this node
+}MessageJoinReq;
+
+
+/**
+ * STRUCT NAME: MessageJoinResp
+ *
+ * DESCRIPTION: Message body of a join request
+ */
+typedef struct MessageJoinResp {
+	MessageHdr messageheader; // message type, etc..
+	//Address nodeaddr; // address of the node that is welcomed
+	MemberListEntry memberList[NUM_MEMBERLIST_ENTRIES_COPY];
+	//long heartbeat; // hearrbeat of this node
+}MessageJoinResp;
+
+/**
+ * STRUCT NAME: MessageLeaveNotice
+ *
+ * DESCRIPTION: Message body of a leave notice
+ */
+typedef struct MessageLeaveNotice {
+	MessageHdr messageheader; // message type, etc..
+	Address nodeaddr; // address of the node that is welcomed
+	MemberListEntry memberList[NUM_MEMBERLIST_ENTRIES_COPY];
+}MessageLeaveNotice;
+
+/**
+ * STRUCT NAME: MessageHEARTBEAT
+ *
+ * DESCRIPTION: Message body of a HEARTBEAT
+ */
+typedef struct MessageHEARTBEAT {
+	MessageHdr messageheader; // message type, etc..
+	Address nodeaddr; // address of the node that is welcomed
+	MemberListEntry memberList[NUM_MEMBERLIST_ENTRIES_COPY];
+	long heartbeat;
+}MessageHEARTBEAT;
+/**
  * CLASS NAME: MP1Node
  *
  * DESCRIPTION: Class implementing Membership protocol functionalities for failure detection
@@ -55,7 +103,8 @@ private:
 	Params *par;
 	Member *memberNode;
 	char NULLADDR[6];
-
+	bool booter;
+    unordered_set<string> memberlist_set;
 public:
 	MP1Node(Member *, Params *, EmulNet *, Log *, Address *);
 	Member * getMemberNode() {
