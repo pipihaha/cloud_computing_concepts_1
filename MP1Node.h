@@ -11,15 +11,20 @@
 #include "stdincludes.h"
 #include "Log.h"
 #include "Params.h"
-#include "Member.ho"
+#include "Member.h"
 #include "EmulNet.h"
 #include "Queue.h"
+#include <unordered_set>
+
 /**
  * Macros
  */
 #define TREMOVE 20
 #define TFAIL 5
 #define NUM_MEMBERLIST_ENTRIES_COPY 20
+#define HB_INTERVAL_PING 5
+#define SUSPECTED_FAILURE_PERIOD HB_INTERVAL_PING * 20
+#define FAILURE_PERIOD  HB_INTERVAL_PING * 10
 /*
  * Note: You can change/add any functions in MP1Node.{h,cpp}
  */
@@ -81,6 +86,17 @@ typedef struct MessageLeaveNotice {
 }MessageLeaveNotice;
 
 /**
+ * STRUCT NAME: MessageMemberFailure
+ *
+ * DESCRIPTION: Message body of member failure 
+ */
+typedef struct MessageMemberFailure {
+	MessageHdr messageheader; // message type, etc..
+	Address nodeaddr; // address of the node that is welcomed
+	//MemberListEntry memberList[NUM_MEMBERLIST_ENTRIES_COPY];
+}MessageMemberFailure;
+
+/**
  * STRUCT NAME: MessageHEARTBEAT
  *
  * DESCRIPTION: Message body of a HEARTBEAT
@@ -88,8 +104,8 @@ typedef struct MessageLeaveNotice {
 typedef struct MessageHEARTBEAT {
 	MessageHdr messageheader; // message type, etc..
 	Address nodeaddr; // address of the node that is welcomed
-	MemberListEntry memberList[NUM_MEMBERLIST_ENTRIES_COPY];
 	long heartbeat;
+	MemberListEntry memberList[NUM_MEMBERLIST_ENTRIES_COPY];
 }MessageHEARTBEAT;
 /**
  * CLASS NAME: MP1Node
@@ -105,6 +121,8 @@ private:
 	char NULLADDR[6];
 	bool booter;
     unordered_set<string> memberlist_set;
+	vector<MemberListEntry> suspected_list;
+	unordered_set<string> suspected_set;
 public:
 	MP1Node(Member *, Params *, EmulNet *, Log *, Address *);
 	Member * getMemberNode() {
@@ -120,6 +138,15 @@ public:
 	void checkMessages();
 	bool recvCallBack(void *env, char *data, int size);
 	void nodeLoopOps();
+	
+	void add_node_to_memberlist(int id, short port, long heartbeat, long timestamp);
+	void delete_node_from_memberlist(int id, short port);
+	void handle_message_JOINREQ(void *env, char *data, int size);
+	void handle_message_JOINREP(void *env, char *data, int size);
+	void handle_message_LEAVENOTICE(void *env, char *data, int size);
+	void handle_message_HEARTBEAT(void *env, char *data, int size);
+	void handle_message_MEMBERFAILURE(void *env, char *data, int size);
+	
 	int isNullAddress(Address *addr);
 	Address getJoinAddress();
 	void initMemberListTable(Member *memberNode);
