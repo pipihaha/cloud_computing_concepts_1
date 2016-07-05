@@ -236,8 +236,8 @@ void MP1Node::delete_node_from_memberlist(int id, short port) {
 			log->logNodeRemove(&memberNode->addr, &removed_addr);
 			
 			memberNode->memberList.erase(memberNode->memberList.begin() + index);
-			memberlist_set.erase(to_string(memberNode->memberList[index].id) + ":" + to_string(memberNode->memberList[index].port));
-			
+			memberlist_set.erase(to_string(id) + ":" + to_string(port));
+			removednode_timestamp[to_string(id) + ":" + to_string(port)] = memberNode->heartbeat;
 			memberNode->nnb -= 1;
 		}
 	}
@@ -252,9 +252,23 @@ void MP1Node::delete_node_from_memberlist(int id, short port) {
  */
 void MP1Node::add_node_to_memberlist(int id, short port, long heartbeat, long timestamp) {
 	string str = to_string(id) + ":" + to_string(port);
+	string addr = memberNode->addr.getAddress();
+	size_t pos = addr.find(":");
+	int owner_id = stoi(addr.substr(0, pos));
+	short owner_port = (short)stoi(addr.substr(pos + 1, addr.size()-pos-1));
+	
+	// if the new node is this node itself, do nothing
+	if (id == owner_id && port == owner_port) {
+		return;
+	}
 	
 	// if the id:port is already in the memberlist, ignore the request
 	if (memberlist_set.count(str) > 0) {
+		return;
+	}
+	
+	// if the node is a previously removed one, wait for at least FAILURE_NODE_REJOIN_INTERBAL time to rejoin
+	if (removednode_timestamp.count(str) > 0 && removednode_timestamp[str] + FAILURE_NODE_REJOIN_INTERBAL >= memberNode->heartbeat) {
 		return;
 	}
 	
@@ -264,7 +278,7 @@ void MP1Node::add_node_to_memberlist(int id, short port, long heartbeat, long ti
 	
 	MemberListEntry new_entry(id, port, heartbeat, timestamp);
 	memberNode->memberList.push_back(new_entry);
-	memberlist_set.insert(to_string(id) + ":" + to_string(port));
+	memberlist_set.insert(str);
 	memberNode->nnb += 1;
 
 	return;
@@ -569,12 +583,18 @@ void MP1Node::nodeLoopOps() {
     memberNode->heartbeat += 1;
 	
 	// check suspected list, remove possibly dead nodes from it and membership list
+	vector<int> remove_list;
 	for (int index = 0; index < (int)suspected_list.size(); index ++) {
 		if (suspected_list[index].timestamp + FAILURE_PERIOD < memberNode->heartbeat) {
 			delete_node_from_memberlist(suspected_list[index].id, suspected_list[index].port);
 			suspected_set.erase(to_string(suspected_list[index].id) + ":" + to_string(suspected_list[index].port));
+			remove_list.push_back(index);
 		}
 	}
+	
+    for (int i = (int) remove_list.size() - 1; i >= 0; i --) {
+	    suspected_list.erase(suspected_list.begin() + remove_list[i]);
+    }
 	
 	// check membership list, move possible dead nodes to suspected list
 	for (auto entry : memberNode->memberList) {
@@ -607,8 +627,6 @@ void MP1Node::nodeLoopOps() {
 			msg->memberList[i].id = 0;
 			msg->memberList[i].port = 0;
 		}
-		
-		//Address toaddr(to_string(memberNode->memberList[index].id) + ":" + to_string(memberNode->memberList[index].port));
 		 
 		Address toaddr = GetAddress(memberNode->memberList[index].id, memberNode->memberList[index].port);
 		emulNet->ENsend(&memberNode->addr, &toaddr, (char *)msg, sizeof(MessageHEARTBEAT));

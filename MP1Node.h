@@ -15,7 +15,7 @@
 #include "EmulNet.h"
 #include "Queue.h"
 #include <unordered_set>
-
+#include <unordered_map>
 /**
  * Macros
  */
@@ -28,6 +28,7 @@
 #define HB_INTERVAL_PING 5
 #define SUSPECTED_FAILURE_PERIOD HB_INTERVAL_PING * 20
 #define FAILURE_PERIOD  HB_INTERVAL_PING * 10
+#define FAILURE_NODE_REJOIN_INTERBAL  SUSPECTED_FAILURE_PERIOD
 /*
  * Note: You can change/add any functions in MP1Node.{h,cpp}
  */
@@ -126,6 +127,7 @@ private:
     unordered_set<string> memberlist_set;
 	vector<MemberListEntry> suspected_list;
 	unordered_set<string> suspected_set;
+	unordered_map<string, long> removednode_timestamp;
 public:
 	MP1Node(Member *, Params *, EmulNet *, Log *, Address *);
 	Member * getMemberNode() {
