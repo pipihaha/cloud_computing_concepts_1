@@ -19,6 +19,9 @@
 /**
  * Macros
  */
+ #define SELFDEBUG 1
+ 
+ 
 #define TREMOVE 20
 #define TFAIL 5
 #define NUM_MEMBERLIST_ENTRIES_COPY 20
@@ -69,9 +72,9 @@ typedef struct MessageJoinReq {
  */
 typedef struct MessageJoinResp {
 	MessageHdr messageheader; // message type, etc..
-	//Address nodeaddr; // address of the node that is welcomed
+	Address nodeaddr; // address of the node 
+	long heartbeat; // hearrbeat of this node
 	MemberListEntry memberList[NUM_MEMBERLIST_ENTRIES_COPY];
-	//long heartbeat; // hearrbeat of this node
 }MessageJoinResp;
 
 /**
@@ -146,6 +149,7 @@ public:
 	void handle_message_LEAVENOTICE(void *env, char *data, int size);
 	void handle_message_HEARTBEAT(void *env, char *data, int size);
 	void handle_message_MEMBERFAILURE(void *env, char *data, int size);
+	Address GetAddress(int id, short port);
 	
 	int isNullAddress(Address *addr);
 	Address getJoinAddress();

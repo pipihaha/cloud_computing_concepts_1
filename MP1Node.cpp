@@ -251,9 +251,16 @@ void MP1Node::delete_node_from_memberlist(int id, short port) {
  * DESCRIPTION: add a member to memberList
  */
 void MP1Node::add_node_to_memberlist(int id, short port, long heartbeat, long timestamp) {
+	string str = to_string(id) + ":" + to_string(port);
+	
+	// if the id:port is already in the memberlist, ignore the request
+	if (memberlist_set.count(str) > 0) {
+		return;
+	}
+	
 	// log it
-	Address added_addr(to_string(id) + ":" + to_string(port));
-	log->logNodeRemove(&memberNode->addr, &added_addr);
+	Address added_addr(str);
+	log->logNodeAdd(&memberNode->addr, &added_addr);
 	
 	MemberListEntry new_entry(id, port, heartbeat, timestamp);
 	memberNode->memberList.push_back(new_entry);
@@ -274,9 +281,9 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
 	 * Your code goes here
 	 */
 	 
-	if (!memberNode->inited || !memberNode->inGroup || memberNode->bFailed) { // not initialized or in any group, just return
-		return false;
-	}
+	//if (!memberNode->inited || !memberNode->inGroup || memberNode->bFailed) { // not initialized or in any group, just return
+	//	return false;
+	//}
 	 
 	MessageHdr * msg = (MessageHdr *) data;
 	 
@@ -322,6 +329,10 @@ void MP1Node::handle_message_JOINREQ(void *env, char *data, int size ) {
 	size_t pos = addr.find(":");
 	int id = stoi(addr.substr(0, pos));
 	short port = (short)stoi(addr.substr(pos + 1, addr.size()-pos-1));
+	
+	#ifdef SELFDEBUG
+        log->LOG(&memberNode->addr, "received join request ...");
+    #endif
 		
 	// if the node is alreay in the memberList, do nothing
 	if (memberlist_set.count(to_string(id) + ":" + to_string(port)) != 0) {
@@ -332,13 +343,44 @@ void MP1Node::handle_message_JOINREQ(void *env, char *data, int size ) {
 	//step 1: advertise it to other nodes in memberlist
 	for (int index = 0; index < (int)memberNode->memberList.size(); index ++) {
 		MemberListEntry *entry = &memberNode->memberList[index];
-		Address toaddr(to_string(entry->id) + ":" + to_string(entry->port));
+		Address toaddr = GetAddress(entry->id, entry->port);
+		
+		#ifdef SELFDEBUG
+		printAddress(&toaddr);
+		
+        log->LOG(&memberNode->addr, "forward join request to memberList ...");
+        #endif
+		
         emulNet->ENsend(&memberNode->addr, &toaddr, data, size);
 	}
 	
 	//step 2: put it in the memberlist
 	add_node_to_memberlist(id, port, req->heartbeat, memberNode->heartbeat);
 	
+	//step 3: send JOINREP back to the new node
+	MessageJoinResp *welcome_resp = (MessageJoinResp *) malloc(sizeof(MessageJoinResp));;
+	welcome_resp->messageheader.msgType = JOINREP;
+	welcome_resp->nodeaddr = memberNode->addr;
+	welcome_resp->heartbeat = memberNode->heartbeat;
+	
+	int num_memberlist_items = min((int)memberNode->memberList.size() - 1, NUM_MEMBERLIST_ENTRIES_COPY);	
+	srand(time(NULL));
+	int start = rand() % memberNode->memberList.size();
+		
+	for (int i = 0; i < num_memberlist_items; i ++) {
+		welcome_resp->memberList[i] = memberNode->memberList[start];
+		start = (start + 1) % memberNode->memberList.size();
+	}
+		
+	for (int i = num_memberlist_items; i < NUM_MEMBERLIST_ENTRIES_COPY; i ++) { // clear these entries,
+		welcome_resp->memberList[i].id = 0;
+		welcome_resp->memberList[i].port = 0;
+	}
+	
+	// send JOINREP message to new member
+    emulNet->ENsend(&memberNode->addr, &req->nodeaddr, (char *)welcome_resp, sizeof(MessageJoinResp));
+	
+	free(welcome_resp);
 	free(req);
     return;
 }
@@ -355,7 +397,20 @@ void MP1Node::handle_message_JOINREP(void *env, char *data, int size ) {
 	 * Your code goes here
 	 */
 	MessageJoinResp *welcome_resp = (MessageJoinResp *) data;
+	string addr = welcome_resp->nodeaddr.getAddress();
+	size_t pos = addr.find(":");
+	int id = stoi(addr.substr(0, pos));
+	short port = (short)stoi(addr.substr(pos + 1, addr.size()-pos-1));
+	
+	
+	#ifdef SELFDEBUG
+        log->LOG(&memberNode->addr, "received JOINREP response ...");
+     #endif
 	 
+	// add introducer to memberList
+	 add_node_to_memberlist(id, port, welcome_resp->heartbeat, memberNode->heartbeat);
+	 
+	 // add members in member list to own memberListist
 	if (memberNode->inited && !memberNode->inGroup) { // should we also compare address of node?
 		memberNode->inGroup = true;
 		memberNode->nnb = 0;
@@ -553,7 +608,9 @@ void MP1Node::nodeLoopOps() {
 			msg->memberList[i].port = 0;
 		}
 		
-		Address toaddr(to_string(memberNode->memberList[index].id) + ":" + to_string(memberNode->memberList[index].port));
+		//Address toaddr(to_string(memberNode->memberList[index].id) + ":" + to_string(memberNode->memberList[index].port));
+		 
+		Address toaddr = GetAddress(memberNode->memberList[index].id, memberNode->memberList[index].port);
 		emulNet->ENsend(&memberNode->addr, &toaddr, (char *)msg, sizeof(MessageHEARTBEAT));
 	}
 	
@@ -604,4 +661,20 @@ void MP1Node::printAddress(Address *addr)
 {
     printf("%d.%d.%d.%d:%d \n",  addr->addr[0],addr->addr[1],addr->addr[2],
                                                        addr->addr[3], *(short*)&addr->addr[4]) ;    
+}
+
+/**
+ * FUNCTION NAME: printAddress
+ *
+ * DESCRIPTION: Print the Address
+ */
+Address MP1Node::GetAddress(int id, short port)
+{
+    Address nodeaddr;
+
+    memset(&nodeaddr, 0, sizeof(Address));
+    *(int *)(&nodeaddr.addr) = id;
+    *(short *)(&nodeaddr.addr[4]) = port;
+
+    return nodeaddr;
 }
